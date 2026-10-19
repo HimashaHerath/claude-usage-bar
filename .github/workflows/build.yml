@@ -1,0 +1,16 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build universal app
+        run: make build SIGN_ID=-
+      - name: Check both architectures
+        run: lipo -archs "build/Claude Usage.app/Contents/MacOS/ClaudeUsage" | grep -q "x86_64 arm64"
