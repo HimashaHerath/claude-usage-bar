@@ -50,18 +50,19 @@ enum FetchError: Error, Equatable {
 struct Credentials {
     let token: String
     let plan: String?            // "Max 20x", "Pro", ...
+    let expiresAt: Date?
 }
 
 enum TokenStore {
     private static let services = ["Claude Code-credentials", "Claude Code"]
 
+    /// The freshest login Claude Code has stored: Keychain on macOS, the file
+    /// on some installs. An old file can sit next to a current Keychain item.
     static func load() -> Credentials? {
-        for service in services {
-            if let blob = keychainBlob(service: service), let creds = parse(blob) { return creds }
-        }
+        var found = services.compactMap { keychainBlob(service: $0) }.compactMap(parse)
         let path = NSHomeDirectory() + "/.claude/.credentials.json"
-        if let data = FileManager.default.contents(atPath: path), let creds = parse(data) { return creds }
-        return nil
+        if let data = FileManager.default.contents(atPath: path), let creds = parse(data) { found.append(creds) }
+        return found.max { ($0.expiresAt ?? .distantPast) < ($1.expiresAt ?? .distantPast) }
     }
 
     private static func keychainBlob(service: String) -> Data? {
@@ -81,7 +82,13 @@ enum TokenStore {
               let oauth = obj["claudeAiOauth"] as? [String: Any],
               let token = (oauth["accessToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !token.isEmpty else { return nil }
-        return Credentials(token: token, plan: planName(oauth))
+        return Credentials(token: token, plan: planName(oauth), expiresAt: expiry(oauth["expiresAt"]))
+    }
+
+    private static func expiry(_ v: Any?) -> Date? {
+        guard let n = v as? NSNumber, n.doubleValue > 0 else { return nil }
+        let raw = n.doubleValue
+        return Date(timeIntervalSince1970: raw > 1e12 ? raw / 1000 : raw)   // stored in milliseconds
     }
 
     private static func planName(_ oauth: [String: Any]) -> String? {
@@ -92,6 +99,41 @@ enum TokenStore {
             if tier.contains("5x") { return "Max 5x" }
         }
         return sub.prefix(1).uppercased() + sub.dropFirst()
+    }
+}
+
+/// Asks Claude Code to renew its own login.
+///
+/// The access token is short-lived and only Claude Code holds the refresh
+/// token. Refreshing it here would rotate that refresh token and sign Claude
+/// Code out, so instead we run `claude -p /usage`: a local command that makes
+/// no model call, but has Claude Code renew and re-store its login first.
+enum ClaudeCLI {
+    static var binary: URL? {
+        let home = NSHomeDirectory()
+        return ["\(home)/.local/bin/claude", "\(home)/.claude/local/claude",
+                "/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+            .map(URL.init(fileURLWithPath:))
+    }
+
+    /// True if the CLI ran and exited cleanly within the timeout.
+    static func renewLogin(timeout: TimeInterval = 60) async -> Bool {
+        guard let binary else { return false }
+        return await withCheckedContinuation { done in
+            let process = Process()
+            process.executableURL = binary
+            process.arguments = ["-p", "--no-session-persistence", "/usage"]
+            process.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            process.terminationHandler = { done.resume(returning: $0.terminationStatus == 0) }
+            do { try process.run() } catch { return done.resume(returning: false) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if process.isRunning { process.terminate() }
+            }
+        }
     }
 }
 

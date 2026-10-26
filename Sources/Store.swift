@@ -16,6 +16,8 @@ final class UsageStore: ObservableObject {
     func panelOpened() { openCount += 1 }
 
     private var token: String?
+    private var expiresAt: Date?
+    private var lastRenewal: Date?
     private var timer: Timer?
     private let normalInterval: TimeInterval = 180
     private let backoffInterval: TimeInterval = 600
@@ -42,13 +44,15 @@ final class UsageStore: ObservableObject {
         Task {
             defer { refreshing = false }
             if token == nil { await loadCredentials() }
+            if let e = expiresAt, e.timeIntervalSinceNow < 5 * 60 { await renewLogin() }
             guard let current = token else {
                 return fail("Not signed in. Run claude once in Terminal.", next: normalInterval)
             }
             var result = await UsageAPI.fetch(token: current)
             if case .failure(.unauthorized) = result {
-                // Claude Code refreshes its token and rewrites the Keychain item.
+                // The token died early or was revoked: have Claude Code renew it and retry once.
                 await loadCredentials()
+                if token == current { await renewLogin() }
                 if let fresh = token, fresh != current { result = await UsageAPI.fetch(token: fresh) }
             }
             switch result {
@@ -59,7 +63,10 @@ final class UsageStore: ObservableObject {
                 schedule(after: normalInterval)
             case .failure(.unauthorized):
                 token = nil
-                fail("Sign-in expired. Open Claude Code to renew it.", next: normalInterval)
+                fail(ClaudeCLI.binary == nil
+                     ? "Sign-in expired. Run claude once in Terminal to renew it."
+                     : "Sign-in expired and couldn't be renewed. Run claude in Terminal.",
+                     next: normalInterval)
             case .failure(.rateLimited):
                 fail("Anthropic is rate limiting. Showing the last numbers.", next: backoffInterval)
             case .failure(.http(let code)):
@@ -76,7 +83,16 @@ final class UsageStore: ObservableObject {
         // The Keychain read can block on a consent prompt; keep it off the main thread.
         let creds = await Task.detached { TokenStore.load() }.value
         token = creds?.token
+        expiresAt = creds?.expiresAt
         if let p = creds?.plan { plan = p }
+    }
+
+    /// Runs Claude Code to renew its login, at most every 10 minutes, then re-reads it.
+    private func renewLogin() async {
+        if let last = lastRenewal, -last.timeIntervalSinceNow < 600 { return }
+        lastRenewal = Date()
+        guard await ClaudeCLI.renewLogin() else { return }
+        await loadCredentials()
     }
 
     private func fail(_ message: String, next: TimeInterval) {

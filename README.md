@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icon.png" alt="Claude Usage icon" width="128"></p>
+
 # Claude Usage
 
 A small native macOS menu bar app that shows your Claude plan limits at a glance:
@@ -78,7 +80,14 @@ logged, written to disk or sent anywhere else. The app reads no conversations,
 keeps no history and has no analytics. The networking and Keychain code is all
 in [`Sources/Core.swift`](Sources/Core.swift), about 200 lines.
 
-If the token has expired, the panel says so: open Claude Code and it renews it.
+The access token only lasts a few hours, and Claude Code renews it when it runs.
+If you mostly use the Claude desktop app, the stored terminal login can go stale.
+When it's about to expire, Claude Usage runs `claude -p --no-session-persistence /usage`
+in the background. That's a local Claude Code command: it makes no model call
+and costs no usage, but Claude Code renews and stores its own login first.
+Claude Usage never refreshes the token itself, because that would sign Claude
+Code out. If the `claude` command isn't installed, the panel asks you to run
+`claude` once in Terminal.
 
 ## Good to know
 
