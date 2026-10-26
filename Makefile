@@ -26,6 +26,8 @@ install: build
 	-pkill -x ClaudeUsage
 	rm -rf "$(DEST)"
 	ditto "$(APP)" "$(DEST)"
+	# Re-register so Finder and Spotlight drop a cached icon.
+	/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$(DEST)"
 	open "$(DEST)"
 
 run: build
