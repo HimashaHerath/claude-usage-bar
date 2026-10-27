@@ -59,16 +59,18 @@ first time. Either open **System Settings → Privacy & Security** and click
 xattr -dr com.apple.quarantine "/Applications/Claude Usage.app"
 ```
 
-### The Keychain prompt
+### No Keychain prompt
 
-On first launch macOS asks whether **Claude Usage** may use **Claude Code-credentials**.
-Click **Always Allow**. The permission belongs to this app only, and macOS asks
-again after each rebuild.
+Claude Code saves its login with Apple's `security` tool, and Claude Usage reads
+it back through that same tool, which macOS already trusts. Asking the Keychain
+directly would mean a password prompt after every rebuild, and again each time
+Claude Code renews its login.
 
 ## How it works, and your privacy
 
-1. It reads Claude Code's OAuth token from the Keychain item `Claude Code-credentials`,
-   or from `~/.claude/.credentials.json` if that's where Claude Code keeps it.
+1. It reads Claude Code's OAuth token from the Keychain item `Claude Code-credentials`
+   (via `/usr/bin/security find-generic-password`), or from
+   `~/.claude/.credentials.json` if that's where Claude Code keeps it.
 2. It asks `https://api.anthropic.com/api/oauth/usage` for your current limits. That
    is the endpoint behind Claude's own usage page.
 3. It refreshes every 3 minutes, when your Mac wakes, and when you open the panel

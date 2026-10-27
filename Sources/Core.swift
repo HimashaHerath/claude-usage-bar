@@ -5,7 +5,6 @@
 // api.anthropic.com/api/oauth/usage, and never logged or written anywhere.
 
 import Foundation
-import Security
 
 struct UsageWindow: Identifiable, Equatable {
     var id: String { label }
@@ -65,16 +64,25 @@ enum TokenStore {
         return found.max { ($0.expiresAt ?? .distantPast) < ($1.expiresAt ?? .distantPast) }
     }
 
+    /// Reads the item through Apple's `security` tool rather than the Keychain API.
+    ///
+    /// Claude Code writes the item with `/usr/bin/security`, so that tool is always
+    /// trusted to read it. Each write resets the item's access list, and each
+    /// rebuild changes this app's signature, so a grant to this app keeps getting
+    /// lost and macOS asks for the login password again.
     private static func keychainBlob(service: String) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &out) == errSecSuccess else { return nil }
-        return out as? Data
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["find-generic-password", "-s", service, "-w"]
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return data
     }
 
     private static func parse(_ data: Data) -> Credentials? {
